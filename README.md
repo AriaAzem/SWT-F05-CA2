@@ -19,3 +19,36 @@ preparation) throws `FlightException`.
 - `Engine.fail()` can simulate an engine failure during a flight.
 - `NavigationSystem.setRouteAvailable(...)` can change route availability.
 - Mockito and JUnit 5 dependencies are already configured with test scope in `pom.xml`.
+
+## Tests
+
+The JUnit 5 and Mockito tests check preparation and takeoff, including successful
+operations, invalid states, unavailable components, and component failures. They
+verify both the aircraft's state and its interactions with the components.
+
+## Run the tests
+
+Install Maven and a full JDK 17, 21, or 25. Open a terminal in the project folder
+and check that Java and Maven are available:
+
+```sh
+java -version
+javac -version
+mvn -version
+```
+
+Run all tests:
+
+```sh
+mvn test
+```
+
+Run only the preparation and takeoff tests:
+
+```sh
+mvn -Dtest=AircraftTakeoffTest test
+```
+
+Test reports are saved in `target/surefire-reports/`. The first run needs internet
+access to download dependencies. This project runs through its tests and does
+not include a `main` application.
