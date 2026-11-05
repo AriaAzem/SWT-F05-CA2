@@ -14,7 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -25,6 +24,18 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class AircraftTakeoffTest {
+    private static final String ENGINE_NOT_OPERATIONAL_MESSAGE =
+            "Cannot prepare for takeoff: engine is not operational.";
+    private static final String INSUFFICIENT_FUEL_MESSAGE =
+            "Cannot prepare for takeoff: insufficient fuel.";
+    private static final String ROUTE_UNAVAILABLE_MESSAGE =
+            "Cannot prepare for takeoff: route is unavailable.";
+    private static final String NOT_ALLOWED_WHILE_GROUNDED_MESSAGE =
+            "Operation is not allowed while aircraft status is GROUNDED.";
+    private static final String NOT_ALLOWED_WHILE_READY_MESSAGE =
+            "Operation is not allowed while aircraft status is READY.";
+    private static final String TAKEOFF_FAILED_MESSAGE = "Takeoff failed.";
+
     private Engine engine;
     private FuelSystem fuelSystem;
     private LandingGear landingGear;
@@ -41,62 +52,61 @@ class AircraftTakeoffTest {
     }
 
     @Test
-    void preparationMakesGroundedAircraftReady() {
-        allowSuccessfulPreparation();
+    void getStatus_returnsGroundedForNewAircraft() {
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
+    }
+
+    @Test
+    void prepareForTakeoff_makesGroundedAircraftReady() {
+        allowSuccessfulPreparation();
 
         aircraft.prepareForTakeoff();
 
         assertEquals(FlightStatus.READY, aircraft.getStatus());
-        verify(engine).isOperational();
-        verify(fuelSystem).hasEnoughFuel();
-        verify(navigationSystem).isRouteAvailable();
-        verify(engine, never()).start();
-        verifyNoInteractions(landingGear);
+        verifyTakeoffDidNotBegin();
     }
 
     @Test
-    void preparationRejectsAnInoperativeEngine() {
+    void prepareForTakeoff_rejectsInoperativeEngine() {
         when(engine.isOperational()).thenReturn(false);
 
         FlightException exception = assertThrows(FlightException.class, aircraft::prepareForTakeoff);
 
-        assertEquals("Cannot prepare for takeoff: engine is not operational.", exception.getMessage());
+        assertEquals(ENGINE_NOT_OPERATIONAL_MESSAGE, exception.getMessage());
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
-        verify(engine, never()).start();
-        verifyNoInteractions(fuelSystem, navigationSystem, landingGear);
+        verifyTakeoffDidNotBegin();
+        verifyNoInteractions(fuelSystem, navigationSystem);
     }
 
     @Test
-    void preparationRejectsInsufficientFuel() {
+    void prepareForTakeoff_rejectsInsufficientFuel() {
         when(engine.isOperational()).thenReturn(true);
         when(fuelSystem.hasEnoughFuel()).thenReturn(false);
 
         FlightException exception = assertThrows(FlightException.class, aircraft::prepareForTakeoff);
 
-        assertEquals("Cannot prepare for takeoff: insufficient fuel.", exception.getMessage());
+        assertEquals(INSUFFICIENT_FUEL_MESSAGE, exception.getMessage());
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
-        verify(engine, never()).start();
-        verifyNoInteractions(navigationSystem, landingGear);
+        verifyTakeoffDidNotBegin();
+        verifyNoInteractions(navigationSystem);
     }
 
     @Test
-    void preparationRejectsAnUnavailableRoute() {
+    void prepareForTakeoff_rejectsUnavailableRoute() {
         when(engine.isOperational()).thenReturn(true);
         when(fuelSystem.hasEnoughFuel()).thenReturn(true);
         when(navigationSystem.isRouteAvailable()).thenReturn(false);
 
         FlightException exception = assertThrows(FlightException.class, aircraft::prepareForTakeoff);
 
-        assertEquals("Cannot prepare for takeoff: route is unavailable.", exception.getMessage());
+        assertEquals(ROUTE_UNAVAILABLE_MESSAGE, exception.getMessage());
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
-        verify(engine, never()).start();
-        verifyNoInteractions(landingGear);
+        verifyTakeoffDidNotBegin();
     }
 
     @Test
-    void preparationPropagatesARouteLookupFailure() {
-        IllegalStateException failure = new IllegalStateException("Navigation system is unavailable.");
+    void prepareForTakeoff_propagatesRouteLookupFailure() {
+        IllegalStateException failure = new IllegalStateException();
         when(engine.isOperational()).thenReturn(true);
         when(fuelSystem.hasEnoughFuel()).thenReturn(true);
         when(navigationSystem.isRouteAvailable()).thenThrow(failure);
@@ -106,15 +116,24 @@ class AircraftTakeoffTest {
 
         assertSame(failure, exception);
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
-        verify(engine, never()).start();
-        verifyNoInteractions(landingGear);
+        verifyTakeoffDidNotBegin();
     }
 
     @Test
-    void takeoffStartsEngineAndRetractsLandingGear() {
+    void prepareForTakeoff_rejectsAlreadyReadyAircraft() {
         allowSuccessfulPreparation();
-        doNothing().when(engine).start();
-        doNothing().when(landingGear).retract();
+        aircraft.prepareForTakeoff();
+
+        FlightException exception = assertThrows(FlightException.class, aircraft::prepareForTakeoff);
+
+        assertEquals(NOT_ALLOWED_WHILE_READY_MESSAGE, exception.getMessage());
+        assertEquals(FlightStatus.READY, aircraft.getStatus());
+        verifyTakeoffDidNotBegin();
+    }
+
+    @Test
+    void takeOff_startsEngineAndRetractsLandingGear() {
+        allowSuccessfulPreparation();
         aircraft.prepareForTakeoff();
 
         aircraft.takeOff();
@@ -127,33 +146,54 @@ class AircraftTakeoffTest {
     }
 
     @Test
-    void takeoffRequiresPreparation() {
+    void takeOff_requiresPreparation() {
         FlightException exception = assertThrows(FlightException.class, aircraft::takeOff);
 
-        assertEquals("Operation is not allowed while aircraft status is GROUNDED.", exception.getMessage());
+        assertEquals(NOT_ALLOWED_WHILE_GROUNDED_MESSAGE, exception.getMessage());
         assertEquals(FlightStatus.GROUNDED, aircraft.getStatus());
         verifyNoInteractions(engine, fuelSystem, landingGear, navigationSystem);
     }
 
     @Test
-    void failedEngineStartAbortsTakeoff() {
-        IllegalStateException failure = new IllegalStateException("Engine could not start.");
+    void takeOff_abortsWhenEngineStartFails() {
+        IllegalStateException failure = new IllegalStateException();
         allowSuccessfulPreparation();
         doThrow(failure).when(engine).start();
         aircraft.prepareForTakeoff();
 
         FlightException exception = assertThrows(FlightException.class, aircraft::takeOff);
 
-        assertEquals("Takeoff failed.", exception.getMessage());
+        assertEquals(TAKEOFF_FAILED_MESSAGE, exception.getMessage());
         assertSame(failure, exception.getCause());
         assertEquals(FlightStatus.ABORTED, aircraft.getStatus());
         verify(engine, times(1)).start();
         verifyNoInteractions(landingGear);
     }
 
+    @Test
+    void takeOff_abortsWhenLandingGearRetractionFails() {
+        IllegalStateException failure = new IllegalStateException();
+        allowSuccessfulPreparation();
+        doThrow(failure).when(landingGear).retract();
+        aircraft.prepareForTakeoff();
+
+        FlightException exception = assertThrows(FlightException.class, aircraft::takeOff);
+
+        assertEquals(TAKEOFF_FAILED_MESSAGE, exception.getMessage());
+        assertSame(failure, exception.getCause());
+        assertEquals(FlightStatus.ABORTED, aircraft.getStatus());
+        verify(engine, times(1)).start();
+        verify(landingGear, times(1)).retract();
+    }
+
     private void allowSuccessfulPreparation() {
         when(engine.isOperational()).thenReturn(true);
         when(fuelSystem.hasEnoughFuel()).thenReturn(true);
         when(navigationSystem.isRouteAvailable()).thenReturn(true);
+    }
+
+    private void verifyTakeoffDidNotBegin() {
+        verify(engine, never()).start();
+        verifyNoInteractions(landingGear);
     }
 }
